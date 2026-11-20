@@ -381,7 +381,7 @@ func TestDriver_InspectPartitionedTable(t *testing.T) {
  oid   | table_schema | table_name  | comment | partition_attrs | partition_strategy |                  partition_exprs                   |                  extra                   
 -------+--------------+-------------+---------+-----------------+--------------------+----------------------------------------------------+----------------------------------------------------
  112  | public       | logs1       |         |                 |                     |                                                    |                                                    
- 113  | public       | logs2       |         | 1               | r                   |                                                    |                                                    
+ 113  | public       | logs2       |         | 2               | r                   |                                                    |
  114  | public       | logs3       |         | 2 0 0           | l                   | (a + b), (a + (b * 2))                             |                              
 
 `))
@@ -390,11 +390,11 @@ func TestDriver_InspectPartitionedTable(t *testing.T) {
 		WillReturnRows(sqltest.Rows(`
 table_name |column_name | data_type | formatted | is_nullable | column_default | character_maximum_length | numeric_precision | datetime_precision | numeric_scale | interval_type | character_set_name | collation_name | is_identity | identity_start | identity_increment |   identity_last  | identity_generation | generation_expression | comment | typtype | typelem |  oid |  attnum 
 -----------+------------+-----------+-----------+-------------+----------------+--------------------------+-------------------+--------------------+---------------+---------------+--------------------+----------------+-------------+----------------+--------------------+------------------+---------------------+-----------------------+---------+---------+---------+------+--------
-logs1      | c1         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 |  
-logs2      | c2         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 |  
-logs2      | c3         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 |  
-logs3      | c4         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 |  
-logs3      | c5         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 |  
+logs1      | c1         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 | 1
+logs2      | c2         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 | 2
+logs2      | c3         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 | 3
+logs3      | c4         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 | 1
+logs3      | c5         | integer   | integer   | NO          |                |                          |                32 |                    |             0 |               |                    |                | NO          |                |                    |                  |                     |                       |         | b       |         |   23 | 2
 `))
 	m.ExpectQuery(sqltest.Escape(fmt.Sprintf(indexesAbove15, "$2, $3, $4"))).
 		WillReturnRows(sqlmock.NewRows([]string{"table_name", "index_name", "column_name", "primary", "unique", "constraint_type", "predicate", "expression", "options", "indnullsnotdistinct"}))
@@ -411,6 +411,7 @@ logs3      | c5         | integer   | integer   | NO          |                |
 	require.True(t, ok)
 	require.Equal(t, []schema.Attr{&OID{V: 112}}, t1.Attrs)
 
+	// logs2 has a dropped column at attribute number 1.
 	t2, ok := s.Table("logs2")
 	require.True(t, ok)
 	require.Len(t, t2.Attrs, 2)

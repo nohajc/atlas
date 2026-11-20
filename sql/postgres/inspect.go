@@ -139,13 +139,14 @@ func (i *inspect) inspectTables(ctx context.Context, r *schema.Realm, opts *sche
 		if len(s.Tables) == 0 {
 			continue
 		}
-		if err := i.columns(ctx, s); err != nil {
+		columnsByAttnum, err := i.columns(ctx, s)
+		if err != nil {
 			return err
 		}
 		if err := i.indexes(ctx, s); err != nil {
 			return err
 		}
-		if err := i.partitions(s); err != nil {
+		if err := i.partitions(s, columnsByAttnum); err != nil {
 			return err
 		}
 		if err := i.fks(ctx, s); err != nil {
@@ -213,26 +214,33 @@ func (i *inspect) tables(ctx context.Context, realm *schema.Realm, opts *schema.
 }
 
 // columns queries and appends the columns of the given table.
-func (i *inspect) columns(ctx context.Context, s *schema.Schema) error {
+func (i *inspect) columns(ctx context.Context, s *schema.Schema) (map[*schema.Table]map[int]*schema.Column, error) {
+	// Keep catalog attribute numbers separate from the compact column slice.
+	columnsByAttnum := make(map[*schema.Table]map[int]*schema.Column)
+	for _, t := range s.Tables {
+		if sqlx.Has(t.Attrs, &Partition{}) {
+			columnsByAttnum[t] = make(map[int]*schema.Column)
+		}
+	}
 	query := columnsQuery
 	if i.crdb {
 		query = crdbColumnsQuery
 	}
 	rows, err := i.querySchema(ctx, query, s)
 	if err != nil {
-		return fmt.Errorf("postgres: querying schema %q columns: %w", s.Name, err)
+		return nil, fmt.Errorf("postgres: querying schema %q columns: %w", s.Name, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		if err := i.addColumn(s, rows); err != nil {
-			return fmt.Errorf("postgres: %w", err)
+		if err := i.addColumn(s, rows, columnsByAttnum); err != nil {
+			return nil, fmt.Errorf("postgres: %w", err)
 		}
 	}
-	return rows.Err()
+	return columnsByAttnum, rows.Err()
 }
 
 // addColumn scans the current row and adds a new column from it to the scope (table or view).
-func (i *inspect) addColumn(s *schema.Schema, rows *sql.Rows) (err error) {
+func (i *inspect) addColumn(s *schema.Schema, rows *sql.Rows, columnsByAttnum map[*schema.Table]map[int]*schema.Column) (err error) {
 	var (
 		typid, typelem, maxlen, precision, timeprecision, scale, seqstart, seqinc, seqlast, attnum                                 sql.NullInt64
 		table, name, typ, fmtype, nullable, defaults, identity, genidentity, genexpr, charset, collate, comment, typtype, interval sql.NullString
@@ -312,6 +320,9 @@ func (i *inspect) addColumn(s *schema.Schema, rows *sql.Rows) (err error) {
 		c.SetCollation(collate.String)
 	}
 	t.AddColumns(c)
+	if cols := columnsByAttnum[t]; cols != nil && attnum.Valid {
+		cols[int(attnum.Int64)] = c
+	}
 	return nil
 }
 
@@ -608,8 +619,8 @@ func (i *inspect) mayAppendOps(part *schema.IndexPart, ns, name, params string, 
 	return nil
 }
 
-// partitions builds the partition each table in the schema.
-func (i *inspect) partitions(s *schema.Schema) error {
+// partitions builds the partition key for each partitioned table in the schema.
+func (i *inspect) partitions(s *schema.Schema, columnsByAttnum map[*schema.Table]map[int]*schema.Column) error {
 	for _, t := range s.Tables {
 		var d Partition
 		if !sqlx.Has(t.Attrs, &d) {
@@ -643,14 +654,13 @@ func (i *inspect) partitions(s *schema.Schema) error {
 					X: &schema.RawExpr{X: d.exprs[:j+1]},
 				})
 				d.exprs = strings.TrimPrefix(d.exprs[j+1:], ", ")
-			// A column at index idx-1.
+			// A column referenced by its pg_attribute.attnum.
 			default:
-				if idx > len(t.Columns) {
-					return fmt.Errorf("postgres: unexpected column index %d", idx)
+				c, ok := columnsByAttnum[t][idx]
+				if !ok {
+					return fmt.Errorf("postgres: partition column with attribute number %d was not found in table %q", idx, t.Name)
 				}
-				d.Parts = append(d.Parts, &PartitionPart{
-					C: t.Columns[idx-1],
-				})
+				d.Parts = append(d.Parts, &PartitionPart{C: c})
 			}
 		}
 		schema.ReplaceOrAppend(&t.Attrs, &d)
